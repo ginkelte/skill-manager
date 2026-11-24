@@ -26,7 +26,11 @@ skill-manager/
 ├── SKILL.md                          # the standard: create, edit, wrap, audit
 ├── references/
 │   ├── learnings-standard.md         # full spec of the learnings standard
-│   └── publication-export.md         # export + redaction + parity procedure
+│   ├── publication-export.md         # export + redaction + parity procedure
+│   ├── harness-agnostic.md           # writing a skill any harness can adopt
+│   ├── script-hygiene.md             # argument loops, exit codes, test matrix
+│   ├── size-and-splitting.md         # splitting an oversized SKILL.md safely
+│   └── truth-and-mirrors.md          # which copy is authoritative here
 ├── templates/
 │   ├── learnings-clause.md           # ## Learnings block to paste into any skill
 │   └── learnings.md                  # starter header for the learnings file
@@ -62,8 +66,12 @@ skills list | grep skill-manager                # whatever your harness calls it
 
 **Create a skill** → follow `SKILL.md` § Workflows A: structure + `learnings.md` + the clause.
 
-**Wrap an existing skill** → § Wrapper: three patterns (reference, extension, guard) and the hard
-rule: *reference, do not copy*.
+**Enforce the standard inside an existing skill** → § Enforcement: add `learnings.md` + the clause,
+translate it to English, sharpen the trigger, verify with the audit. That is the default: the
+standard belongs *inside* the skill, not around it.
+
+**Wrap** → only when the skill is not yours to edit (vendored, a plugin's own, regenerated upstream).
+The wrapper references the base skill, never copies it, and carries its own `learnings.md`.
 
 **Audit the standard** →
 
