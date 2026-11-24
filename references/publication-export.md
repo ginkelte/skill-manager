@@ -125,6 +125,13 @@ There are two distinct layers and it is best not to confuse them:
 | **Owning account** | Publishing from a personal account means the *owner* and the initial commit's author are that handle. It is the owner's decision, not an oversight: the gate reports it and it is accepted explicitly. |
 
 When the owner chooses to publish from their account, the procedure is: a **new** repo (not the one with
-history), a single commit with a neutral author (`<proyecto> maintainers`) and **no** signing with a
-personal key — that way the content and the messages stay clean and the only fingerprint is the account, which is
-public by choice.
+history) and a single commit authored by **that account** — `Name <ID+name@users.noreply.github.com>`, the
+handle's noreply address, never a personal email, and no signing with a personal key. The only fingerprint
+is the account, which is public by choice.
+
+**Never invent an author.** A placeholder such as `<project> maintainers` produces a commit nobody can
+attribute, contradicts the `LICENSE` holder and reads like an anonymous dump. Verify before pushing:
+
+```bash
+git -C <repo> log --all --format='%an <%ae>' | sort -u   # one identity: the publishing account
+```

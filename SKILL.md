@@ -91,6 +91,7 @@ Minimum checklist. Anything that fails it is not declared "ready":
 - [ ] **If it is going to be public**: `pii-scan.sh` with 0 hits in the tree **and** history/owner, and
       the tree exported with `export-clean.sh` (not by hand). `learnings.md` goes out header-only.
 - [ ] **Shareable**: no product path, CLI name or metadata namespace → `references/harness-agnostic.md`.
+- [ ] **Attributable**: commit author = the publishing account (noreply), never a placeholder.
 - [ ] **No secrets, no browser profiles, no DBs** inside the skill directory: the
       snapshot publishes whatever is there. `rsync` already excludes `chrome-*profile/`, but **not** `.db`
       or binaries, and the secret masker usually processes only UTF-8: look for
@@ -292,12 +293,11 @@ This skill keeps `learnings.md` in its own directory (append-only).
    English even if the conversation is in Spanish. You translate the file, not the chat.
 10. **Promoting everything to `SKILL.md`.** The body grows until nobody reads it. Stable and universal →
    pitfall; specific and rare → it stays in `learnings.md`.
-11. **Counting skills with `find -maxdepth N`.** It undercounts: skills nest up to 4 levels
-    (`mlops/models/<skill>/SKILL.md`). Measure with `audit-skills.py --summary`, which globs to a
-    bounded depth and skips `.curator_backups/`.
-12. **Validating the clause with `grep learnings.md`.** A skill that only *mentions* the file in
-    prose passes that grep without having the section. The clause exists when there is a heading
-    `## Learnings`; the audit checks it with a heading regex, not with a substring.
+11. **Counting skills with `find -maxdepth N`.** It undercounts (skills nest up to 4 levels).
+    Measure with `audit-skills.py --summary`.
+12. **Validating the clause with `grep learnings.md`.** A skill that only *mentions* the file passes
+    that grep. The clause exists when there is a `## Learnings` heading; the audit uses a heading
+    regex.
 13. **An exporter that swallows `stderr` gives false clean results.** If the redaction map is applied with
     `sed -i ... 2>/dev/null`, a badly escaped rule (typical case: the term contains the delimiter
     `|`) fails and reads as "applied"; the gate in the next step checks the result, but if you
@@ -320,8 +320,10 @@ This skill keeps `learnings.md` in its own directory (append-only).
 
 ## References
 
-- `references/publication-export.md` — export to your own repo: `git init`/`reset` order, redaction,
-  `pii-scan.sh` gate, parity check, and how to purge content that already reached `refs/pull/*`.
+- `references/publication-export.md` — export to your own repo: order, redaction, gate, and how to
+  purge content that already reached `refs/pull/*`.
+- `references/script-hygiene.md` — the scripts a skill ships: argument loops, exit codes, gates vs
+  warnings, and the test matrix (installed layout + flat copy).
 - `references/harness-agnostic.md` — writing a skill for any harness: one anchor for paths,
   capabilities instead of command names, root derivation that fails fast.
 - `references/learnings-standard.md` — full learnings spec: fields, caps, promotion, retrofit matrix.
@@ -329,10 +331,9 @@ This skill keeps `learnings.md` in its own directory (append-only).
 - `templates/learnings.md` — initial header of the learnings file.
 - `scripts/append-learning.sh` — atomic append; creates the header **from `templates/learnings.md`**,
   rejects `.archive`/`.hub`/`snapshots` paths, flattens newlines, needs `--title` + one content field.
-- `scripts/pii-scan.sh` — publication gate over tree, history, authors, owner and PR refs
-  (private list at `<root>/../references/pii-blocklist.txt`).
-- `scripts/export-clean.sh` — copy to an export dir applying the private redaction map; aborts on
-  any surviving forbidden term.
+- `scripts/pii-scan.sh` — gate over tree, history, authors, owner, PR refs
+  (list at `<root>/../references/pii-blocklist.txt`).
+- `scripts/export-clean.sh` — copy + redaction map; aborts on any surviving forbidden term.
 - `scripts/audit-skills.py` — gap audit by origin: YAML frontmatter, clause in 3 levels, and
   `--fail-on-gaps` counting only live skills.
 - `learnings.md` — what this skill itself learned. Read it before fighting the loader. **Local only:**
