@@ -29,7 +29,14 @@ done
 MAP="${MAP:-${PII_EXPORT_MAP:-$ROOT/../references/pii-export-map.txt}}"
 SCAN="$(dirname "$0")/pii-scan.sh"
 
-die() { printf 'export-clean: %s\n' "$1" >&2; exit 1; }
+CREATED_DEST=0
+die() {
+  # A failed export must not be left looking ready: if this run created the destination,
+  # remove it. A directory that already existed is left alone (never destroy user data).
+  [ "${CREATED_DEST:-0}" -eq 1 ] && rm -rf "${DEST:?}"
+  printf 'export-clean: %s\n' "$1" >&2
+  exit 1
+}
 
 [ -n "${SKILL_DIR:-}" ] && [ -n "${DEST:-}" ] || die "usage: export-clean.sh <skill-dir> <destination> [--force]"
 [ -d "$SKILL_DIR" ] || die "skill does not exist: $SKILL_DIR"
@@ -40,6 +47,7 @@ if [ -d "$DEST" ] && [ -n "$(ls -A "$DEST" 2>/dev/null)" ] && [ "$FORCE" != "--f
   die "$DEST is not empty (use --force to overwrite)"
 fi
 
+[ -d "$DEST" ] || CREATED_DEST=1
 mkdir -p "$DEST"
 rm -rf "${DEST:?}/SKILL.md" "${DEST:?}/learnings.md" "${DEST:?}/references" "${DEST:?}/templates" "${DEST:?}/scripts"
 cp -a "$SKILL_DIR/SKILL.md" "$SKILL_DIR/learnings.md" "$DEST"/
