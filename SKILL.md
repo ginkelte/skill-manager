@@ -1,16 +1,16 @@
 ---
 name: skill-manager
-description: "Use when creating, editing, wrapping or auditing a skill."
+description: "Use when creating, editing, enforcing or auditing a skill."
 version: 1.1.0
 author: skill-manager maintainers
 license: MIT
-tags: [skills, harness, standard, learnings, authoring, wrapper]
+tags: [skills, harness, standard, learnings, authoring, enforcement]
 # Add `metadata.<your-harness>` only if your harness reads its own namespace.
 ---
 
 # Skill Manager
 
-Single standard for **creating, editing, wrapping and auditing** skills in any agent harness that
+Single standard for **creating, editing, enforcing and auditing** skills in any agent harness that
 loads skills from a directory: structure, validation and — above all — the **learnings clause**.
 
 `$SKILLS_ROOT` is that directory (`$SKILLS_ROOT/<category>/<skill>/`). The scripts derive it from
@@ -32,7 +32,8 @@ Yes, whenever:
 
 - You are going to **create** a skill (through your harness's tool/installer, or by hand).
 - You are going to **edit** the `SKILL.md`, a `references/*.md`, a script or the frontmatter of any skill.
-- You are asked for a **wrapper**: a skill that wraps, extends or composes another one.
+- You want the standard **inside** an existing skill: `learnings.md`, the clause, English (§ Enforcement).
+- The skill **cannot be edited** (vendored, a plugin's own, regenerated upstream) → then and only then, wrap.
 - You are asked to **audit**, **retrofit**, **normalize** or "update the skills to the new standard".
 - An existing skill failed you and you are about to improvise: look in its `learnings.md` first.
 
@@ -46,30 +47,10 @@ No, when:
   harness's own authoring reference for package frontmatter rules. The learnings clause
   still applies here.
 
-## 🚨 Regime: where a skill's truth lives
+## Regime: where a skill's truth lives
 
-Verify it in any installation — the numbers change, the method does not:
-
-| What | How to check it |
-|---|---|
-| Where the truth lives | `ls "$SKILLS_ROOT"` — plain local files; the root is usually **not** a git repo |
-| How many skills exist and in what state | `audit-skills.py --summary` → total · live · archived |
-| Which ones ship with the harness | `.bundled_manifest` in the root, if the harness keeps one |
-| Are they published to a repo? | the scheduler's job config — look for a snapshot job |
-
-Consequences that are not negotiable:
-
-1. **Truth = local.** The file an agent edits is `$SKILLS_ROOT/<category>/<skill>/...`.
-   The backup repo only receives a **copy** through the periodic snapshot (cron), which opens
-   its own PR. **Never** edit the copy inside the backup repo's snapshot path: rsync deletes it.
-2. **You edit locally, you do not open a PR by hand** for skills. The PR is opened by the snapshot job and
-   the cron generates it. (If your installation also versions scripts, the truth may be the other way
-   around: check your pipeline before editing a script by hand.)
-3. **The loader is cached per session.** A skill created now will not load in this session, even if it
-   is perfect on disk. Verify with the harness's skill list (a fresh process does see it) and
-   leave the real load test for a fresh session.
-4. **`.archive/`, `.hub/`, `.curator_backups/` are off-limits.** The curator archives by disuse;
-   retrofitting an archived skill is wasted work.
+Before editing, confirm which copy is authoritative and what mirrors it → `references/truth-and-mirrors.md`.
+Assuming the repo is the truth is how a local edit gets silently reverted.
 
 ## Mandatory standard (every new skill)
 
@@ -136,36 +117,30 @@ grep -in -A8 'error\|failed\|blocked' "$SKILLS_ROOT/<category>/<skill>/learnings
   "$SKILLS_ROOT/<category>/<skill>" --title "..." --symptom "..." --cause "..." --fix "..." --rule "..."
 ```
 
-## Wrapper: how to wrap a skill
+## Enforcement: change the skill, do not wrap it
 
-"Wrapper" = a new skill whose job is to orchestrate another one. Three forms, in order of
-preference:
+The default is to fix the skill itself. English, the `learnings.md` loop and the clause belong
+**inside** the skill: a second skill that duplicates the first is two sources of truth that diverge
+silently, and the one loaded by the agent is whichever the trigger picks.
 
-1. **Reference (composition)** — the wrapper does not copy the other flow: it invokes it.
-   ```markdown
-   ## Step 1 — Ingest
-   Load `skill_view('<skill-base>')` and follow its ingest flow as is. Do not reimplement it:
-   if they diverge, the base skill wins.
-   ```
-   If the harness reads a metadata block, declare `related_skills: [<skill-base>]` there.
+Retrofit an existing skill in four steps:
 
-2. **Extension (new mode)** — the wrapper adds a mode or phase the base does not have (e.g. "besides
-   creating, retrofit in batch"). The base stays untouched; the wrapper explicitly declares which
-   steps it replaces and which it inherits.
+1. **Learning channel**: create `learnings.md` from `templates/learnings.md` and paste the
+   `## Learnings` block from `templates/learnings-clause.md`.
+2. **English**: body, `references/`, `templates/`, comments and script messages (see § Language).
+3. **Trigger and size**: sharpen the `description`, and if the body passes 20k move detail to
+   `references/` — a loader that truncates is a skill that lies.
+4. **Verify**: `audit-skills.py --show <name>` → `fml ok · lrn ok · clause ok`.
 
-3. **Guard (pre/post condition)** — the wrapper does not produce the result: it verifies it. E.g. "before
-   saying 'ready', run the validation checklist". Useful when the base skill already exists and you do
-   not want to touch it.
+### When you cannot edit it: wrap
 
-Hard wrapper rules:
+A wrapper is allowed **only when the skill is not yours to modify**: vendored code, a plugin's own
+skills, a directory an upstream update regenerates. Then the wrapper is a local skill that
+**references** the other one — never copies it — and carries its own `learnings.md`, because it does
+not inherit the base's.
 
-- **A single source of truth.** If the wrapper starts duplicating steps from the base, it breaks the
-  first time the base changes. Reference, do not copy.
-- **Declare precedence**: "if the base and this skill contradict each other, X wins". Without that, a
-  future agent invents the tie-break.
-- **Explicit counter-trigger**: when NOT to use the wrapper and use the base directly.
-- The wrapper also carries `learnings.md` and the clause. It does not inherit the base's learnings: each
-  one records what broke at its own level.
+If the skill *is* editable, editing beats wrapping every time: one file to maintain, one trigger, no
+divergence.
 
 ## Workflows
 
@@ -205,10 +180,8 @@ Hard wrapper rules:
 Never in a blind batch: there are hundreds of skills and a fraction is usually archived. Correct order:
 
 ```bash
-# 1. who is missing what
-python3 "$SKILLS_ROOT/<category>/skill-manager/scripts/audit-skills.py" --summary
-# 2. detail for one subtree
-python3 "$SKILLS_ROOT/<category>/skill-manager/scripts/audit-skills.py" --root "$SKILLS_ROOT/<category>"
+python3 "$SKILLS_ROOT/<category>/skill-manager/scripts/audit-skills.py" --summary      # who is missing what
+python3 ... --root "$SKILLS_ROOT/<category>"                                          # detail, one subtree
 ```
 1. **Lazy (default):** the retrofit is applied to the skill **being used**. It is the cheap mode and
    the one that breaks nothing: whoever touches the skill normalizes it.
@@ -230,6 +203,12 @@ It goes to its own repo, with personal-data redaction and parity verification �
 
 Out of scope: deciding **which** skills should exist (curation and pruning) and operating your
 installation's snapshot/deploy pipeline. This skill only leaves the artifact compliant.
+
+### F) Splitting an oversized `SKILL.md`
+
+Moved to `references/size-and-splitting.md` — a whole-file rewrite is the riskiest edit you can make,
+so the procedure (backup, fence-aware extraction, parity diff) lives in a reference you load first:
+`skill_view('<this-skill>', file_path='references/size-and-splitting.md')`.
 
 ## Validation (mandatory before saying "ready")
 
@@ -286,7 +265,8 @@ This skill keeps `learnings.md` in its own directory (append-only).
    snapshot publishes whatever is there. `rsync` excludes `chrome-*profile/`, **not** `.db` or
    binaries, and the secret masker reads only UTF-8 (`except UnicodeDecodeError: continue`), so a
    blob passes unmasked. If an artifact must not leave the host, it does not live inside the skill.
-7. **Duplicating content in a wrapper** instead of referencing: two sources of truth, they diverge.
+7. **Wrapping an editable skill** (or duplicating its steps in a wrapper): two triggers, two bodies,
+   they diverge. Edit the skill; wrap only what you may not touch.
 8. **Learnings as a diary.** It is not a session log: one entry = one finding that saves time
    next time. If it does not save time, it does not go in.
 9. **Writing the skill in the chat's language.** The artifact is shared and published: it goes in
@@ -298,7 +278,13 @@ This skill keeps `learnings.md` in its own directory (append-only).
 12. **Validating the clause with `grep learnings.md`.** A skill that only *mentions* the file passes
     that grep. The clause exists when there is a `## Learnings` heading; the audit uses a heading
     regex.
-13. **An exporter that swallows `stderr` gives false clean results.** If the redaction map is applied with
+13. **Splitting a `SKILL.md` with a naive heading regex corrupts it.** `^#{1,6} ` matches comment lines
+    inside fenced code blocks (`# 1. Step one`), so a section extraction stops a few lines in: the
+    pointer lands in the middle of the section and the rest of the body is left orphaned under it. Fix
+    the parser (track fences) *and* verify after writing — moved text present in the reference, even
+    fence count, pointer adjacent to the next heading. Before any whole-file rewrite, confirm the
+    snapshot copy from the backup repo matches the live size; that is the only recovery point.
+14. **An exporter that swallows `stderr` gives false clean results.** If the redaction map is applied with
     `sed -i ... 2>/dev/null`, a badly escaped rule (typical case: the term contains the delimiter
     `|`) fails and reads as "applied"; the gate in the next step checks the result, but if you
     also silence it there, you publish with the term inside. Escape the delimiter, do not silence
@@ -327,6 +313,8 @@ This skill keeps `learnings.md` in its own directory (append-only).
 - `references/harness-agnostic.md` — writing a skill for any harness: one anchor for paths,
   capabilities instead of command names, root derivation that fails fast.
 - `references/learnings-standard.md` — full learnings spec: fields, caps, promotion, retrofit matrix.
+- `references/truth-and-mirrors.md` — which copy of a skill is authoritative here, and what mirrors it.
+- `references/size-and-splitting.md` — splitting an oversized `SKILL.md` without silently truncating it.
 - `templates/learnings-clause.md` — the canonical `## Learnings` block (copy as is).
 - `templates/learnings.md` — initial header of the learnings file.
 - `scripts/append-learning.sh` — atomic append; creates the header **from `templates/learnings.md`**,
