@@ -133,6 +133,15 @@ Before publishing any artifact, two scripts must pass: `export-clean.sh` (copy +
 why redacting the tree is not enough, is in
 [`references/publication-export.md`](references/publication-export.md).
 
+## Repository layer
+
+`SKILL.md`, `references/`, `templates/`, `scripts/` and `learnings.md` **are the skill** — copying the
+first four plus the header is a complete install. Everything else here belongs to the repository, not
+to the skill: `README.md`, `LICENSE`, `.gitignore`, `.github/workflows/ci.yml` and `tests/`.
+
+That split is deliberate: the skill stays portable (no CI assumptions), and the repo keeps the
+verification that makes the guards mechanical.
+
 ## Language
 
 Every skill is written in **English**: `SKILL.md`, `references/`, `templates/`, `learnings.md`,
