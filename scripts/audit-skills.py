@@ -129,6 +129,10 @@ def parse_frontmatter(text: str) -> tuple[dict[str, str], bool, int]:
             km = re.search(rf"^{key}\s*:\s*(.+)$", block, re.MULTILINE)
             if km:
                 fields[key] = km.group(1).strip().strip('"').strip("'")
+        # Without PyYAML a regex cannot prove the YAML is valid, but it can prove the keys
+        # exist — reporting every skill as BAD would be a worse lie than a weaker check.
+        if yaml is None and fields.get("name") and fields.get("description"):
+            valid = True
 
     return fields, bool(valid and fields.get("name") and fields.get("description")), end
 

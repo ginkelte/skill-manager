@@ -90,6 +90,8 @@ bash scripts/pii-scan.sh ~/git/<repo>                                           
 public artifact it ships with **only the canonical header** — the append-only rules, the promotion
 rule and the recording command, which are useful documentation — and **zero entries**.
 
+- A failed export leaves nothing behind: if the destination did not exist, `export-clean.sh` removes
+  it (a directory you supplied is never deleted).
 - `export-clean.sh` regenerates it from `templates/learnings.md` (the `<skill-name>` placeholder
   filled with the real name) and **aborts** if any `## YYYY-MM-DD` entry or more than 2 KB
   survives: it is a gate, not a convention.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/run.sh — black-box test suite for skill-manager.
 #
-# Usage: bash tests/run.sh        (runs from any cwd; needs bash, python3, git)
+# Usage: bash tests/run.sh   (any cwd; needs bash, git, GNU timeout, python3 + PyYAML)
 #
 # Prints "PASS <case>" / "FAIL <case> — <reason>" per case and a final
 # "RESULT: N passed, M failed". Exit 0 only when every case passes.
@@ -10,15 +10,40 @@
 # mktemp(1) directory that the EXIT trap removes.
 set -uo pipefail
 
+# Hard prerequisites: without them a case would blame the code under test for a
+# broken toolchain. `timeout` is GNU coreutils; macOS ships it as `gtimeout`.
+missing=""
+for tool in bash git python3; do
+  command -v "$tool" >/dev/null 2>&1 || missing="${missing:+$missing, }$tool"
+done
+if ! command -v timeout >/dev/null 2>&1; then
+  echo "tests: missing prerequisite: timeout (on macOS install coreutils and use gtimeout)" >&2
+  exit 2
+fi
+if [ -n "$missing" ]; then
+  echo "tests: missing prerequisites: $missing" >&2
+  exit 2
+fi
+python3 -c 'import yaml' 2>/dev/null || {
+  echo "tests: missing prerequisite: PyYAML (python3 -m pip install pyyaml) — the frontmatter case cannot validate YAML without it" >&2
+  exit 2
+}
+
 cd "$(dirname "$0")/.." || { echo "tests: cannot cd to the repo root" >&2; exit 1; }
 REPO="$(pwd)"
-# $TMP lives one level down so that a wrong root derivation from
-# $TMP/flat/scripts (scripts -> skill -> category) lands on $BASE, which holds
-# only $TMP: it can never look like a skills root by accident.
+# The flat-clone case gets its own sandbox ($BASE/flatbase): the shared $TMP
+# accumulates fixtures with SKILL.md files (mini-skill, export-fixture) that make
+# $BASE match `*/*/SKILL.md`, so a wrong root derivation could succeed by
+# accident. $FLAT_BASE never holds a SKILL.md, so a wrong root cannot look like
+# a skills root either.
 BASE="$(mktemp -d "${TMPDIR:-/tmp}/skill-manager-tests.XXXXXX")"
 TMP="$BASE/run"
 mkdir -p "$TMP"
 trap 'rm -rf "$BASE"' EXIT
+# Snapshot before any case runs: the suite must not touch the repository, not
+# even when the checkout already carries local edits (e.g. a modified script).
+REPO_STATUS_BEFORE="$TMP/repo-status.before"
+git -C "$REPO" status --porcelain > "$REPO_STATUS_BEFORE" 2>/dev/null || : > "$REPO_STATUS_BEFORE"
 
 PASSED=0
 FAILED=0
@@ -82,9 +107,15 @@ except StopIteration:
     print("could not find both '## Learnings' and '## Common Pitfalls' in SKILL.md")
     sys.exit(1)
 
+# Drop exactly one known annotation line. A prefix test (`> Literal copy of`)
+# would let divergent prose hide under that prefix and pass parity.
+ANNOTATION = (
+    "> Literal copy of `templates/learnings-clause.md` — "
+    "edit both together (the audit checks presence, not parity)."
+)
 block = [
     l for l in skill_lines[start:end]
-    if not l.lstrip().startswith("> Literal copy of")
+    if l.strip() != ANNOTATION
 ]
 got = "\n".join(block).rstrip() + "\n"
 want = template.rstrip() + "\n"
@@ -111,30 +142,34 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. size — SKILL.md must stay under the loader cap
+# 3. size — SKILL.md must stay under the loader cap (characters, not bytes:
+#    multi-byte UTF-8 makes wc -c overstate the length the loader sees)
 # ---------------------------------------------------------------------------
-skill_chars="$(wc -c < SKILL.md)"
+skill_chars="$(python3 -c "print(len(open('SKILL.md', encoding='utf-8').read()))")"
 if [ "$skill_chars" -le 20000 ]; then
   ok size
 else
-  bad size "expected SKILL.md <= 20000 chars, got $skill_chars"
+  bad size "expected SKILL.md <= 20000 characters, got $skill_chars"
 fi
 
 # ---------------------------------------------------------------------------
 # 4. learnings publishable — no dated entries, under 2000 bytes
 # ---------------------------------------------------------------------------
-lrn_entries="$(grep -cE '^## [0-9]{4}-' learnings.md 2>/dev/null || true)"
-lrn_entries="${lrn_entries:-0}"
-lrn_bytes="$(wc -c < learnings.md)"
-if [ "$lrn_entries" -eq 0 ] && [ "$lrn_bytes" -le 2000 ]; then
-  ok learnings-publishable
+reason=""
+if [ ! -f learnings.md ]; then
+  reason="expected learnings.md at the repo root; it does not exist"
 else
-  bad learnings-publishable "expected 0 '^## YYYY-' entries and <= 2000 bytes; got $lrn_entries entries, $lrn_bytes bytes"
+  lrn_entries="$(grep -cE '^## [0-9]{4}-' learnings.md)"
+  lrn_bytes="$(wc -c < learnings.md)"
+  if [ "$lrn_entries" -ne 0 ] || [ "$lrn_bytes" -gt 2000 ]; then
+    reason="expected 0 '^## YYYY-' entries and <= 2000 bytes; got $lrn_entries entries, $lrn_bytes bytes"
+  fi
 fi
+if [ -z "$reason" ]; then ok learnings-publishable; else bad learnings-publishable "$reason"; fi
 
 # ---------------------------------------------------------------------------
 # 5. frontmatter — opening fence, non-empty name/description, real YAML,
-#    and name == directory name in the canonical layout.
+#    and name == the skill's repository name (directory only if no remote).
 # ---------------------------------------------------------------------------
 fm_out="$(python3 - "$REPO/SKILL.md" <<'PY'
 import re
@@ -203,26 +238,21 @@ elif [ -z "$fm_name" ]; then
   reason="expected a non-empty 'name:'; got none"
 elif [ "${fm_desc_len:-0}" -eq 0 ]; then
   reason="expected a non-empty 'description:'; got len=0"
-elif [ "$fm_yaml_avail" = "yes" ] && [ "$fm_yaml" != "yes" ]; then
-  reason="expected PyYAML to parse the frontmatter; got YAML_OK=no $fm_err"
-elif [ "$fm_yaml" = "yes" ]; then
-  dir_name="$(basename "$REPO")"
-  matches=0
-  [ "$fm_name" = "$dir_name" ] && matches=1
-  if [ "$matches" -eq 0 ]; then
-    # This worktree may be named after the branch (<name>-ci). The published
-    # checkout is named after the repository, so accept only that exact case.
-    remote_name="$(git -C "$REPO" remote get-url origin 2>/dev/null \
-      | sed -e 's#/$##' -e 's#\.git$##' -e 's#.*/##')"
-    case "$dir_name" in
-      "$fm_name"-*) [ "$remote_name" = "$fm_name" ] && matches=1 ;;
-    esac
-  fi
-  if [ "$matches" -eq 0 ]; then
-    reason="expected name '$fm_name' to equal the skill directory name; got directory '$(basename "$REPO")'"
-  fi
+elif [ "$fm_yaml_avail" != "yes" ]; then
+  reason="PyYAML is not importable by python3 — install it (python3 -m pip install pyyaml); the frontmatter cannot be validated"
+elif [ "$fm_yaml" != "yes" ]; then
+  reason="expected valid YAML frontmatter; got YAML_OK=no $fm_err"
 else
-  reason="expected PyYAML to parse the frontmatter; got YAML_OK=no $fm_err"
+  # `name` identifies the skill. A canonical checkout is named after it; a
+  # worktree or a locally renamed clone is not, so fall back to the repository
+  # name from the remote, and to the directory only when there is no remote.
+  dir_name="$(basename "$REPO")"
+  remote_name="$(git -C "$REPO" remote get-url origin 2>/dev/null \
+    | sed -e 's#/$##' -e 's#\.git$##' -e 's#.*/##')"
+  expected_name="${remote_name:-$dir_name}"
+  if [ "$fm_name" != "$expected_name" ]; then
+    reason="expected name '$fm_name' to equal the skill name '$expected_name'; got directory '$dir_name'"
+  fi
 fi
 if [ -z "$reason" ]; then ok frontmatter; else bad frontmatter "$reason"; fi
 
@@ -263,20 +293,21 @@ if [ -z "$reason" ]; then ok audit-installed; else bad audit-installed "$reason"
 # ---------------------------------------------------------------------------
 # 7. audit in a flat clone — must fail fast with guidance, never crawl /
 # ---------------------------------------------------------------------------
-mkdir -p "$TMP/flat/scripts"
-cp scripts/audit-skills.py "$TMP/flat/scripts/"
-flat_err="$TMP/flat.err"
+FLAT_BASE="$BASE/flatbase"
+mkdir -p "$FLAT_BASE/run/flat/scripts"
+cp scripts/audit-skills.py "$FLAT_BASE/run/flat/scripts/"
+flat_err="$FLAT_BASE/flat.err"
 # HOME is pinned to an empty directory so ~/skills cannot exist: the point of
 # the case is the script's own derivation, not the developer's home layout.
-mkdir -p "$TMP/emptyhome"
-env -u SKILLS_ROOT HOME="$TMP/emptyhome" timeout 20 \
-  python3 "$TMP/flat/scripts/audit-skills.py" >"$TMP/flat.out" 2>"$flat_err"
+mkdir -p "$FLAT_BASE/emptyhome"
+env -u SKILLS_ROOT HOME="$FLAT_BASE/emptyhome" timeout 20 \
+  python3 "$FLAT_BASE/run/flat/scripts/audit-skills.py" >"$FLAT_BASE/flat.out" 2>"$flat_err"
 flat_rc=$?
 reason=""
 if [ "$flat_rc" -eq 124 ]; then
   reason="expected exit 2, got 124: the script walked the filesystem for 20s instead of failing fast"
 elif [ "$flat_rc" -ne 2 ]; then
-  reason="expected exit 2; got exit $flat_rc (stdout='$(evidence "$TMP/flat.out")' stderr='$(evidence "$flat_err")')"
+  reason="expected exit 2; got exit $flat_rc (stdout='$(evidence "$FLAT_BASE/flat.out")' stderr='$(evidence "$flat_err")')"
 elif ! grep -qE -- '--root|SKILLS_ROOT' "$flat_err"; then
   reason="expected stderr to mention --root or SKILLS_ROOT; got '$(evidence "$flat_err")'"
 fi
@@ -286,8 +317,10 @@ if [ -z "$reason" ]; then ok audit-flat-clone; else bad audit-flat-clone "$reaso
 # 8. pii-scan.sh --show-terms must print the list once and exit 0 (the bug
 #    printed the list and fell back into the argument loop: infinite output)
 # ---------------------------------------------------------------------------
-# head -c caps the output so a regression cannot fill the disk; PIPESTATUS[0]
-# keeps timeout's own exit code.
+# The output is capped so a regression cannot fill the disk; PIPESTATUS[0]
+# keeps timeout's own exit code. Diagnose by line count FIRST: when the loop
+# re-enters, `head -c` closes the pipe, sed dies of SIGPIPE and the script's
+# fallback reports exit 2 — not a 124 timeout, and not the missing-list error.
 PII_BLOCKLIST="$TERMS" timeout 10 bash scripts/pii-scan.sh --show-terms 2>"$TMP/st.err" \
   | head -c 65536 > "$TMP/st.out"
 st_rc=${PIPESTATUS[0]}
@@ -295,14 +328,12 @@ st_lines=$(grep -c '' "$TMP/st.out" 2>/dev/null || true)
 st_lines="${st_lines:-0}"
 want_terms=$(grep -c '' "$TERMS")
 reason=""
-if [ "$st_rc" -eq 124 ]; then
-  reason="expected exit 0, got 124: --show-terms never terminated (the print-then-loop bug)"
+if [ "$st_lines" -ne "$want_terms" ]; then
+  reason="expected $want_terms lines, got $st_lines: --show-terms re-entered the argument loop (stderr='$(evidence "$TMP/st.err")')"
+elif [ "$st_rc" -eq 124 ]; then
+  reason="expected exit 0, got 124: --show-terms timed out"
 elif [ "$st_rc" -ne 0 ]; then
   reason="expected exit 0; got exit $st_rc (stdout='$(evidence "$TMP/st.out")' stderr='$(evidence "$TMP/st.err")')"
-elif [ "$st_lines" -ne "$want_terms" ]; then
-  reason="expected exactly $want_terms printed term(s); got $st_lines line(s): '$(evidence "$TMP/st.out")'"
-elif [ "$st_lines" -gt 5 ]; then
-  reason="expected <= 5 lines (no repetition); got $st_lines"
 elif ! cmp -s "$TMP/st.out" "$TERMS"; then
   reason="expected the printed terms to match the list; got '$(evidence "$TMP/st.out")'"
 fi
@@ -339,6 +370,9 @@ if [ -z "$reason" ]; then ok pii-placeholder-author; else bad pii-placeholder-au
 # ---------------------------------------------------------------------------
 # 10. learnings gate — an export whose template carries entries must abort
 # ---------------------------------------------------------------------------
+mkdir -p "$TMP/export-pre"; printf 'keep\n' > "$TMP/export-pre/keepme.txt"
+PII_EXPORT_MAP="$TMP/empty.map" PII_BLOCKLIST="$TERMS" \
+  bash scripts/export-clean.sh . "$TMP/export-pre" --force >"$TMP/gate-pre.out" 2>&1
 EFX="$TMP/export-fixture"
 mkdir -p "$EFX"
 cp -a SKILL.md learnings.md references templates scripts "$EFX"/
@@ -351,6 +385,12 @@ if [ "$gate_rc" -ne 1 ]; then
   reason="expected exit 1 (learnings with entries); got exit $gate_rc: '$(evidence "$TMP/gate.out")'"
 elif ! grep -qi 'learnings' "$TMP/gate.out"; then
   reason="expected the message to mention learnings; got '$(evidence "$TMP/gate.out")'"
+elif [ -e "$TMP/export-gate-dest" ]; then
+  # A failed export must not leave anything behind: the destination did not exist
+  # before this run, so export-clean.sh removes it.
+  reason="expected the aborted export to leave no destination; got '$(ls -A "$TMP/export-gate-dest" 2>/dev/null | tr '\n' ' ')'"
+elif [ ! -f "$TMP/export-pre/keepme.txt" ]; then
+  reason="expected a pre-existing destination to survive the abort; keepme.txt is gone"
 fi
 if [ -z "$reason" ]; then ok export-learnings-gate; else bad export-learnings-gate "$reason"; fi
 
@@ -394,19 +434,83 @@ if [ "$clean_rc" -ne 0 ]; then
 elif [ ! -f "$DEST/learnings.md" ]; then
   reason="expected $DEST/learnings.md to exist; it does not"
 else
-  dest_bytes="$(wc -c < "$DEST/learnings.md")"
-  dest_entries="$(grep -cE '^## [0-9]{4}-' "$DEST/learnings.md" 2>/dev/null || true)"
-  dest_entries="${dest_entries:-0}"
   pycache="$(find "$DEST" -name '__pycache__' -type d 2>/dev/null | head -n 3 | tr '\n' ' ')"
-  if [ "$dest_bytes" -gt 2000 ]; then
-    reason="expected exported learnings.md <= 2000 bytes; got $dest_bytes"
-  elif [ "$dest_entries" -ne 0 ]; then
-    reason="expected 0 session entries in the export; got $dest_entries"
+  # Byte-for-byte canonical header: a literal copy of the source learnings.md
+  # with an extra short note would slip past a size/entry check.
+  # export-clean substitutes the source directory's basename; this checkout may
+  # be a worktree (`<repo>-ci`), so derive it instead of hardcoding the name.
+  export_name="$(basename "$REPO")"
+  if ! cmp -s "$DEST/learnings.md" <(sed "s/<skill-name>/${export_name}/g" templates/learnings.md); then
+    reason="expected the exported learnings.md to be exactly the canonical header; got '$(evidence "$DEST/learnings.md")'"
   elif [ -n "$pycache" ]; then
     reason="expected no __pycache__ in the export; got '$pycache'"
   fi
 fi
 if [ -z "$reason" ]; then ok export-clean; else bad export-clean "$reason"; fi
+
+# ---------------------------------------------------------------------------
+# 13. pii-term-hit — a term with a regex metacharacter is escaped and matched,
+#     and export-clean refuses a tree that carries it (positive PAT coverage).
+# ---------------------------------------------------------------------------
+HITFX="$TMP/pii-hit"
+TERMS_HIT="$TMP/hit-terms.txt"
+printf 'qz.a\n' > "$TERMS_HIT"                  # `.` is a regex metacharacter
+mkdir -p "$HITFX/references"
+cp SKILL.md learnings.md "$HITFX"/
+cp -a templates references "$HITFX"/
+printf 'leak: qz.a\n' > "$HITFX/references/leak.txt"
+
+PII_BLOCKLIST="$TERMS_HIT" bash scripts/pii-scan.sh "$HITFX" --tree-only \
+  >"$TMP/hit.out" 2>&1
+hit_rc=$?
+reason=""
+if [ "$hit_rc" -ne 1 ]; then
+  reason="expected exit 1 (literal hit); got exit $hit_rc: '$(evidence "$TMP/hit.out")'"
+elif ! grep -qF 'qz.a' "$TMP/hit.out"; then
+  reason="expected the report to show the hit 'qz.a'; got '$(evidence "$TMP/hit.out")'"
+fi
+if [ -z "$reason" ]; then
+  PII_EXPORT_MAP="$TMP/empty.map" PII_BLOCKLIST="$TERMS_HIT" \
+    bash scripts/export-clean.sh "$HITFX" "$TMP/pii-hit-dest" >"$TMP/hit-export.out" 2>&1
+  hit_export_rc=$?
+  if [ "$hit_export_rc" -eq 0 ]; then
+    reason="expected export-clean to refuse a tree containing 'qz.a'; it exited 0"
+  elif ! grep -qiE 'not publishable|forbidden' "$TMP/hit-export.out"; then
+    reason="expected export-clean to explain the tree is not publishable; got '$(evidence "$TMP/hit-export.out")'"
+  fi
+fi
+if [ -z "$reason" ]; then ok pii-term-hit; else bad pii-term-hit "$reason"; fi
+
+# ---------------------------------------------------------------------------
+# 14. pii-show-terms-no-list — --show-terms with a missing list must exit 2
+#     with guidance (the branch where the print-then-loop bug used to live)
+# ---------------------------------------------------------------------------
+# Run an isolated copy: the script's own `<root>/../references` candidates must
+# not pick up a real blocklist from wherever this checkout happens to live.
+NT_SCAN="$TMP/no-terms/scripts/pii-scan.sh"
+mkdir -p "$(dirname "$NT_SCAN")"
+cp scripts/pii-scan.sh "$NT_SCAN"
+PII_BLOCKLIST="$TMP/no-such-blocklist.txt" bash "$NT_SCAN" --show-terms \
+  >"$TMP/noterms.out" 2>&1
+nt_rc=$?
+reason=""
+if [ "$nt_rc" -ne 2 ]; then
+  reason="expected exit 2 (missing term list); got exit $nt_rc: '$(evidence "$TMP/noterms.out")'"
+elif ! grep -qiE 'PII_BLOCKLIST|create .*blocklist' "$TMP/noterms.out"; then
+  reason="expected the message to mention PII_BLOCKLIST or creating the list; got '$(evidence "$TMP/noterms.out")'"
+fi
+if [ -z "$reason" ]; then ok pii-show-terms-no-list; else bad pii-show-terms-no-list "$reason"; fi
+
+# ---------------------------------------------------------------------------
+# 15. repo-intact — the suite only reads the repository; exporting it must not
+#     leave a modified or untracked file behind (compared with the snapshot)
+# ---------------------------------------------------------------------------
+git -C "$REPO" status --porcelain > "$TMP/repo-status.after" 2>&1
+reason=""
+if ! cmp -s "$REPO_STATUS_BEFORE" "$TMP/repo-status.after"; then
+  reason="the suite changed the repository; status now: '$(evidence "$TMP/repo-status.after")'"
+fi
+if [ -z "$reason" ]; then ok repo-intact; else bad repo-intact "$reason"; fi
 
 # ---------------------------------------------------------------------------
 printf '\nRESULT: %d passed, %d failed\n' "$PASSED" "$FAILED"
