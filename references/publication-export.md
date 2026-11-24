@@ -84,6 +84,21 @@ bash scripts/pii-scan.sh ~/git/<repo>                                           
   filter's output, not against the live file:
   `bash scripts/export-clean.sh <skill> /tmp/exp --force && diff -r /tmp/exp ~/git/<repo>`.
 
+### The repo layer is a delta, not part of the skill
+
+A published repo carries files the skill itself does not have: `README.md`, `LICENSE`, `.gitignore`,
+`.github/workflows/`, `tests/`. They belong to the **repo**, not to the skill directory, so they do
+not travel in the export and the parity check must ignore them:
+
+```bash
+bash scripts/export-clean.sh "$SKILLS_ROOT/<category>/<skill>" /tmp/exp --force
+diff -r /tmp/exp ~/git/<repo> \
+  -x .git -x README.md -x LICENSE -x .gitignore -x .github -x tests
+```
+
+If the delta grows beyond those files, the check stops proving anything: the export is supposed to
+be the skill, and the repo is supposed to be the export plus a thin shell.
+
 ### `learnings.md` never ships with content
 
 `learnings.md` is session memory: what the agent learned while working on **that** host. In the
