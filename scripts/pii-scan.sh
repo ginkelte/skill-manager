@@ -75,6 +75,17 @@ if [ "$TREE_ONLY" -eq 0 ] && [ -d "$DIR/.git" ]; then
   fi
 
   echo
+  echo "-- authors (must be the publishing account) --"
+  auth="$(git -C "$DIR" log --all --format='%an <%ae>' 2>/dev/null | sort -u || true)"
+  if [ -n "$auth" ]; then
+    printf '%s\n' "$auth" | sed 's/^/   /'
+    if printf '%s\n' "$auth" | grep -qiE 'maintainers|contributors|placeholder|anonymous'; then
+      hits=$((hits + 1))
+      echo "-> placeholder identity: an invented author cannot be attributed (use the account's noreply)"
+    fi
+  fi
+
+  echo
   echo "-- remote owner --"
   rem="$(git -C "$DIR" remote -v 2>/dev/null | grep -iE "$PAT" || true)"
   if [ -n "$rem" ]; then
