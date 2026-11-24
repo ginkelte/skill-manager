@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# learnings.md is tracked on purpose and published EMPTY (placeholder).
+# Real learnings are session knowledge and stay out of this repo.
