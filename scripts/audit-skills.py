@@ -217,7 +217,8 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     if not args.root.is_dir():
-        print(f"error: {args.root} does not exist", file=sys.stderr)
+        print(f"error: {args.root} does not exist — pass --root <dir> or set $SKILLS_ROOT",
+              file=sys.stderr)
         return 2
     if args.root.resolve() in REJECTED_ROOTS:
         print(

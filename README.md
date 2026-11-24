@@ -62,6 +62,21 @@ Quick check from a fresh process, using whatever list command your harness expos
 skills list | grep skill-manager                # whatever your harness calls it
 ```
 
+## Tests
+
+```bash
+bash tests/run.sh        # 12 black-box cases; exit 1 on any failure
+```
+
+No network, no fixtures left behind: every case builds its own sandbox in `mktemp -d`. CI runs the
+same suite on every push and pull request (`.github/workflows/ci.yml`), and the suite is the required
+check on `main`.
+
+It covers both layouts (installed `<category>/<skill>/` and a flat clone), the gates that must bite
+(placeholder commit author, `learnings.md` with entries), clause parity with the template, the 20k
+ceiling, and the two bugs that shipped here once: the `--show-terms` argument loop and the
+root-derivation crawl.
+
 ## Usage
 
 **Create a skill** → follow `SKILL.md` § Workflows A: structure + `learnings.md` + the clause.
